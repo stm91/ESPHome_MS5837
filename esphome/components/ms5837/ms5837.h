@@ -2,11 +2,12 @@
 
 #include "esphome/core/component.h"
 #include "esphome/components/sensor/sensor.h"
-#include "esphome/core/hal.h"  // always include this first
+#include "esphome/core/hal.h"
+#include "esphome/components/i2c/i2c.h"
+
 #ifdef ARDUINO
-#include <Arduino.h>
+  #include <Arduino.h>
 #endif
-#include <Wire.h>
 
 namespace esphome {
 namespace ms5837 {
