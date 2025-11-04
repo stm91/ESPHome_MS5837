@@ -6,43 +6,31 @@ namespace ms5837 {
 
 static const char *const TAG = "ms5837.sensor";
 
-// -----------------------------------------------------------------------------
-// Setup: initialize I²C and read calibration data
-// -----------------------------------------------------------------------------
 void MS5837Sensor::setup() {
-  ESP_LOGCONFIG(TAG, "Initializing MS5837 sensor...");
+  ESP_LOGCONFIG(TAG, "Setting up MS5837 sensor via I2C (addr 0x%02X)...", this->address_);
 
-  Wire.begin();
-  delay(10);
-
-  // Reset sensor
-  Wire.beginTransmission(MS5837_ADDR);
-  Wire.write(MS5837_RESET);
-  if (Wire.endTransmission() != 0) {
-    ESP_LOGE(TAG, "MS5837: I2C reset command failed");
-    this->b_initialized_ = false;
+  uint8_t cmd = MS5837_RESET;
+  if (this->write(&cmd, 1) != i2c::ERROR_OK) {
+    ESP_LOGE(TAG, "Reset command failed");
     return;
   }
-
   delay(10);
 
   // Read calibration coefficients
   for (uint8_t i = 0; i < 7; i++) {
-    Wire.beginTransmission(MS5837_ADDR);
-    Wire.write(MS5837_PROM_READ + i * 2);
-    if (Wire.endTransmission() != 0 || Wire.requestFrom(MS5837_ADDR, (uint8_t)2) != 2) {
-      ESP_LOGE(TAG, "MS5837: Failed reading calibration coefficient %u", i);
-      this->b_initialized_ = false;
+    uint8_t reg = MS5837_PROM_READ + i * 2;
+    uint8_t data[2];
+    if (this->write(&reg, 1) != i2c::ERROR_OK || this->read(data, 2) != i2c::ERROR_OK) {
+      ESP_LOGE(TAG, "Failed reading calibration coefficient %u", i);
       return;
     }
-    this->C_[i] = (Wire.read() << 8) | Wire.read();
+    this->C_[i] = (data[0] << 8) | data[1];
   }
 
   uint8_t crc_read = C_[0] >> 12;
   uint8_t crc_calc = crc4(C_);
   if (crc_read != crc_calc) {
-    ESP_LOGE(TAG, "MS5837: CRC mismatch (read=%u calc=%u)", crc_read, crc_calc);
-    this->b_initialized_ = false;
+    ESP_LOGE(TAG, "CRC mismatch (read=%u calc=%u)", crc_read, crc_calc);
     return;
   }
 
@@ -50,23 +38,18 @@ void MS5837Sensor::setup() {
   this->model_ = version;
   this->b_initialized_ = true;
 
-  ESP_LOGCONFIG(TAG, "MS5837 initialized successfully (version=0x%02X)", version);
+  ESP_LOGCONFIG(TAG, "MS5837 ready, version 0x%02X", version);
 }
 
-// -----------------------------------------------------------------------------
-// Periodic update
-// -----------------------------------------------------------------------------
 void MS5837Sensor::update() {
   if (!this->b_initialized_) {
-    ESP_LOGW(TAG, "MS5837 not initialized; retrying setup...");
+    ESP_LOGW(TAG, "MS5837 not initialized, retrying...");
     this->setup();
-    if (!this->b_initialized_)
-      return;
+    if (!this->b_initialized_) return;
   }
 
-  // Perform a single conversion
   if (!this->read_and_calc_values()) {
-    ESP_LOGE(TAG, "MS5837 read failed");
+    ESP_LOGE(TAG, "Read failed");
     this->invalidate_sensors();
     return;
   }
@@ -77,16 +60,12 @@ void MS5837Sensor::update() {
   this->temperature_sensor->publish_state(this->convert_temp(t));
   this->pressure_sensor->publish_state(this->convert_press(p));
 
-  if (this->mode_ == MS5837_MODE_ALTITUDE) {
+  if (this->mode_ == MS5837_MODE_ALTITUDE)
     this->altitude_sensor->publish_state(this->convert_alt(this->altitude(p)));
-  } else if (this->mode_ == MS5837_MODE_DEPTH) {
+  else if (this->mode_ == MS5837_MODE_DEPTH)
     this->altitude_sensor->publish_state(this->convert_alt(this->depth(p)));
-  }
 }
 
-// -----------------------------------------------------------------------------
-// Dump config
-// -----------------------------------------------------------------------------
 void MS5837Sensor::dump_config() {
   ESP_LOGCONFIG(TAG, "MS5837 Sensor:");
   LOG_SENSOR("  ", "Temperature", this->temperature_sensor);
@@ -94,35 +73,27 @@ void MS5837Sensor::dump_config() {
   LOG_SENSOR("  ", "Altitude/Depth", this->altitude_sensor);
 }
 
-// -----------------------------------------------------------------------------
-// Internal helpers
-// -----------------------------------------------------------------------------
 uint8_t MS5837Sensor::read_and_calc_values() {
-  // trigger pressure conversion
-  Wire.beginTransmission(MS5837_ADDR);
-  Wire.write(MS5837_CONVERT_D1_8192 - (this->osr_ * 2));
-  if (Wire.endTransmission() != 0) return 0;
+  uint8_t cmd;
+
+  // Pressure conversion
+  cmd = MS5837_CONVERT_D1_8192 - (this->osr_ * 2);
+  if (this->write(&cmd, 1) != i2c::ERROR_OK) return 0;
   delay(CONVERSION_TIME[this->osr_]);
 
-  // read pressure ADC
-  Wire.beginTransmission(MS5837_ADDR);
-  Wire.write(MS5837_ADC_READ);
-  if (Wire.endTransmission() != 0) return 0;
-  if (Wire.requestFrom(MS5837_ADDR, (uint8_t)3) != 3) return 0;
-  this->D1_pres_ = (Wire.read() << 16) | (Wire.read() << 8) | Wire.read();
+  cmd = MS5837_ADC_READ;
+  uint8_t data[3];
+  if (this->write(&cmd, 1) != i2c::ERROR_OK || this->read(data, 3) != i2c::ERROR_OK) return 0;
+  this->D1_pres_ = (data[0] << 16) | (data[1] << 8) | data[2];
 
-  // trigger temperature conversion
-  Wire.beginTransmission(MS5837_ADDR);
-  Wire.write(MS5837_CONVERT_D2_8192 - (this->osr_ * 2));
-  if (Wire.endTransmission() != 0) return 0;
+  // Temperature conversion
+  cmd = MS5837_CONVERT_D2_8192 - (this->osr_ * 2);
+  if (this->write(&cmd, 1) != i2c::ERROR_OK) return 0;
   delay(CONVERSION_TIME[this->osr_]);
 
-  // read temperature ADC
-  Wire.beginTransmission(MS5837_ADDR);
-  Wire.write(MS5837_ADC_READ);
-  if (Wire.endTransmission() != 0) return 0;
-  if (Wire.requestFrom(MS5837_ADDR, (uint8_t)3) != 3) return 0;
-  this->D2_temp_ = (Wire.read() << 16) | (Wire.read() << 8) | Wire.read();
+  cmd = MS5837_ADC_READ;
+  if (this->write(&cmd, 1) != i2c::ERROR_OK || this->read(data, 3) != i2c::ERROR_OK) return 0;
+  this->D2_temp_ = (data[0] << 16) | (data[1] << 8) | data[2];
 
   this->calculate();
   return 1;
@@ -155,39 +126,29 @@ void MS5837Sensor::invalidate_sensors() {
 }
 
 float MS5837Sensor::convert_temp(float fTemp) {
-  if (temp_units_ == MS5837_UNITS_TEMP_F)
-    return (fTemp * 9.0f / 5.0f) + 32.0f;
-  if (temp_units_ == MS5837_UNITS_TEMP_K)
-    return fTemp + 273.15f;
-  if (temp_units_ == MS5837_UNITS_TEMP_R)
-    return (fTemp + 273.15f) * 9.0f / 5.0f;
+  if (temp_units_ == MS5837_UNITS_TEMP_F) return (fTemp * 9.0f / 5.0f) + 32.0f;
+  if (temp_units_ == MS5837_UNITS_TEMP_K) return fTemp + 273.15f;
+  if (temp_units_ == MS5837_UNITS_TEMP_R) return (fTemp + 273.15f) * 9.0f / 5.0f;
   return fTemp;
 }
 
 float MS5837Sensor::convert_press(float fPress) {
-  if (press_units_ == MS5837_UNITS_PRESS_PA)
-    return fPress * 100.0f;
-  if (press_units_ == MS5837_UNITS_PRESS_KPA)
-    return fPress / 10.0f;
-  if (press_units_ == MS5837_UNITS_PRESS_INHG)
-    return fPress * 0.02953f;
+  if (press_units_ == MS5837_UNITS_PRESS_PA) return fPress * 100.0f;
+  if (press_units_ == MS5837_UNITS_PRESS_KPA) return fPress / 10.0f;
+  if (press_units_ == MS5837_UNITS_PRESS_INHG) return fPress * 0.02953f;
   return fPress;
 }
 
 float MS5837Sensor::convert_alt(float fAlt) {
-  if (alt_units_ == MS5837_UNITS_ALT_FT)
-    return fAlt * 3.28084f;
-  if (alt_units_ == MS5837_UNITS_ALT_CM)
-    return fAlt * 100.0f;
-  if (alt_units_ == MS5837_UNITS_ALT_IN)
-    return fAlt * 39.3701f;
+  if (alt_units_ == MS5837_UNITS_ALT_FT) return fAlt * 3.28084f;
+  if (alt_units_ == MS5837_UNITS_ALT_CM) return fAlt * 100.0f;
+  if (alt_units_ == MS5837_UNITS_ALT_IN) return fAlt * 39.3701f;
   return fAlt;
 }
 
-// CRC4 validation for PROM coefficients
 uint8_t MS5837Sensor::crc4(uint16_t n_prom[]) {
   uint16_t n_rem = 0x00;
-  n_prom[0] = (0x0FFF & n_prom[0]);
+  n_prom[0] &= 0x0FFF;
   n_prom[7] = 0;
 
   for (uint8_t cnt = 0; cnt < 16; cnt++) {
@@ -200,7 +161,7 @@ uint8_t MS5837Sensor::crc4(uint16_t n_prom[]) {
       if (n_rem & 0x8000)
         n_rem = (n_rem << 1) ^ 0x3000;
       else
-        n_rem = (n_rem << 1);
+        n_rem <<= 1;
     }
   }
   n_rem = (n_rem >> 12) & 0x000F;
