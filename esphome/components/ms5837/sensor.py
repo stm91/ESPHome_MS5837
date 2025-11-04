@@ -56,11 +56,7 @@ CONFIG_SCHEMA = cv.Schema(
 ).extend(cv.COMPONENT_SCHEMA)
 
 async def to_code(config):
-    upd_ms = int(
-        cv.ensure_list(
-            cv.positive_time_period_milliseconds(config["update_interval"])
-        )[0].total_milliseconds
-    )
+    upd_ms = int(config["update_interval"].total_milliseconds)
     mode = config.get(CONF_MODE, 0)
     osr = config.get(CONF_OSR, 0)
 
