@@ -19,47 +19,33 @@ static inline void wd_delay_ms(uint32_t total_ms) {
 }
 
 void MS5837Sensor::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up MS5837 (0x%02X)...", this->address_);
+  ESP_LOGCONFIG(TAG, "Setting up MS5837 (0x%02X)...", this->get_i2c_address());
 
-  // --- HARD LOCKUP PREVENTION: check I²C bus lines before any transaction ---
-  auto *bus = this->get_i2c_parent();
-  if (bus == nullptr) {
-    ESP_LOGW(TAG, "No I2C parent bus found, skipping MS5837 init.");
-    this->mark_failed();
-    this->status_set_warning();
-    return;
-  }
-
-  // If the lines are stuck low, skip initialization entirely.
-  if (!bus->is_started()) {
-    ESP_LOGW(TAG, "I2C bus not started, skipping MS5837 init.");
-    this->mark_failed();
-    this->status_set_warning();
-    return;
-  }
-  if (!bus->is_ready()) {  // quick poll: verifies bus not busy
-    ESP_LOGW(TAG, "I2C bus busy or lines held low, skipping MS5837 init.");
-    this->mark_failed();
-    this->status_set_warning();
-    return;
-  }
-
-  // --- Safe, non-blocking device presence probe ---
-  i2c::ErrorCode err = i2c::ERROR_OK;
+  // --- Safe presence probe with timeout (no hangs even if SDA/SCL low) ---
   uint8_t dummy = 0;
+  i2c::ErrorCode err = i2c::ERROR_UNKNOWN;
   uint32_t start = millis();
-  do {
+  while (millis() - start < 300) {  // 300 ms max wait
     err = this->write(&dummy, 0);
-    if (err == i2c::ERROR_OK) break;
+    if (err == i2c::ERROR_OK)
+      break;
     App.feed_wdt();
     delay(5);
-  } while (millis() - start < 300);
+  }
 
   if (err != i2c::ERROR_OK) {
-    ESP_LOGW(TAG, "MS5837 not detected within 300 ms, skipping initialization.");
+    ESP_LOGW(TAG,
+             "MS5837 not responding after 300 ms (err %d), skipping init to avoid lockup.",
+             err);
     this->mark_failed();
     this->status_set_warning();
     return;
+  }
+
+  // Clamp OSR index
+  if (this->osr_ > 5) {
+    ESP_LOGW(TAG, "Invalid OSR index %u; clamping to 0 (8192).", this->osr_);
+    this->osr_ = 0;
   }
 
   // Reset
@@ -72,7 +58,7 @@ void MS5837Sensor::setup() {
   }
   wd_delay_ms(10);
 
-  // Read PROM calibration (C[0..6]); C[7] is CRC word shadowed by routine
+  // Read calibration coefficients
   for (uint8_t i = 0; i < 7; i++) {
     uint8_t reg = MS5837_PROM_READ + i * 2;
     uint8_t data[2] = {0};
@@ -81,7 +67,7 @@ void MS5837Sensor::setup() {
     if (err != i2c::ERROR_OK) {
       ESP_LOGW(TAG, "PROM write failed at index %u (err %d)", i, err);
       this->status_set_warning();
-      return;  // non-fatal: device stays online
+      return;
     }
 
     err = this->read(data, 2);
@@ -102,7 +88,7 @@ void MS5837Sensor::setup() {
              "CRC mismatch (read=%u calc=%u); leaving component in warning state.",
              crc_read, crc_calc);
     this->status_set_warning();
-    return;  // avoid using bad coefficients
+    return;
   }
 
   this->model_ = (C_[0] >> 5) & 0x7F;
