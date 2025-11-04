@@ -2,7 +2,8 @@
   "domain": "ms5837",
   "name": "MS5837 Sensor",
   "version": "1.0",
-  "requirements": [],
+  "codeowners": ["@stm91"],
   "dependencies": [],
-  "codeowners": []
+  "requirements": [],
+  "platforms": ["sensor"]
 }
