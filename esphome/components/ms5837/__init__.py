@@ -16,8 +16,9 @@ from esphome.const import (
 AUTO_LOAD = []
 CODEOWNERS = []
 
-ms5837_ns = cg.global_ns
-MS5837Component = ms5837_ns.class_("MS5837_Component", cg.PollingComponent)
+# IMPORTANT: use the component namespace, not global
+ms5837_ns = cg.esphome_ns.namespace("ms5837")
+MS5837Sensor = ms5837_ns.class_("MS5837Sensor", cg.PollingComponent)
 
 CONF_MODE = "mode"
 CONF_OSR = "osr"
@@ -27,10 +28,10 @@ CONF_ALTITUDE = "altitude"
 
 CONFIG_SCHEMA = cv.Schema(
     {
-        cv.GenerateID(): cv.declare_id(MS5837Component),
+        cv.GenerateID(): cv.declare_id(MS5837Sensor),
         cv.Optional("update_interval", default="60s"): cv.update_interval,
-        cv.Optional(CONF_MODE, default=0): cv.int_,  # 0=raw, 1=altitude, 2=depth
-        cv.Optional(CONF_OSR, default=0): cv.int_,   # matches your MS5837_OSR_* map
+        cv.Optional(CONF_MODE, default=0): cv.int_,
+        cv.Optional(CONF_OSR, default=0): cv.int_,
         cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(
             unit_of_measurement=UNIT_CELSIUS,
             icon=ICON_THERMOMETER,
@@ -55,7 +56,11 @@ CONFIG_SCHEMA = cv.Schema(
 
 
 async def to_code(config):
-    upd_ms = int(cv.ensure_list(cv.positive_time_period_milliseconds(config["update_interval"]))[0].total_milliseconds)
+    upd_ms = int(
+        cv.ensure_list(
+            cv.positive_time_period_milliseconds(config["update_interval"])
+        )[0].total_milliseconds
+    )
     mode = config.get(CONF_MODE, 0)
     osr = config.get(CONF_OSR, 0)
 
