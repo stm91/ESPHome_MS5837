@@ -19,12 +19,17 @@ static inline void wd_delay_ms(uint32_t total_ms) {
 }
 
 void MS5837Sensor::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up MS5837 sensor via I2C (addr 0x%02X)...", this->address_);
+  ESP_LOGCONFIG(TAG, "Setting up MS5837 (0x%02X)...", this->address_);
 
-  // --- Lockup prevention #1: quick presence probe (no sensor -> bail fast) ---
-  if (this->write(nullptr, 0) != i2c::ERROR_OK) {
-    ESP_LOGW(TAG, "MS5837 not responding on I2C bus; skipping initialization to avoid lockup.");
-    this->mark_failed();              // keeps node online / API responsive
+  const uint32_t start = millis();
+  while (millis() - start < 300) {  // 300 ms max wait
+    if (this->write(nullptr, 0) == i2c::ERROR_OK) break;
+    App.feed_wdt();
+    delay(5);
+  }
+  if (millis() - start >= 300) {
+    ESP_LOGW(TAG, "MS5837 not detected after 300 ms, skipping init to avoid lockup.");
+    this->mark_failed();
     this->status_set_warning();
     return;
   }
