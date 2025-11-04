@@ -1,3 +1,4 @@
+# esphome/components/ms5837/sensor.py
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import sensor
@@ -16,7 +17,7 @@ from esphome.const import (
 AUTO_LOAD = []
 CODEOWNERS = []
 
-# IMPORTANT: use the component namespace, not global
+# IMPORTANT: namespace must be the component folder name
 ms5837_ns = cg.esphome_ns.namespace("ms5837")
 MS5837Sensor = ms5837_ns.class_("MS5837Sensor", cg.PollingComponent)
 
@@ -53,7 +54,6 @@ CONFIG_SCHEMA = cv.Schema(
         ),
     }
 ).extend(cv.COMPONENT_SCHEMA)
-
 
 async def to_code(config):
     upd_ms = int(
