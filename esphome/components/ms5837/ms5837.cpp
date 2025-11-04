@@ -21,25 +21,39 @@ static inline void wd_delay_ms(uint32_t total_ms) {
 void MS5837Sensor::setup() {
   ESP_LOGCONFIG(TAG, "Setting up MS5837 (0x%02X)...", this->address_);
 
-  const uint32_t start = millis();
-  while (millis() - start < 300) {  // 300 ms max wait
-    if (this->write(nullptr, 0) == i2c::ERROR_OK) break;
-    App.feed_wdt();
-    delay(5);
+  // --- HARD LOCKUP PREVENTION: check I²C bus lines before any transaction ---
+  // If the lines are stuck low, skip initialization entirely.
+  if (!this->parent_->is_started()) {
+    ESP_LOGW(TAG, "I2C bus not started, skipping MS5837 init.");
+    this->mark_failed();
+    this->status_set_warning();
+    return;
   }
-  if (millis() - start >= 300) {
-    ESP_LOGW(TAG, "MS5837 not detected after 300 ms, skipping init to avoid lockup.");
+  if (!this->parent_->is_ready()) {  // quick poll: verifies bus not busy
+    ESP_LOGW(TAG, "I2C bus busy or lines held low, skipping MS5837 init.");
     this->mark_failed();
     this->status_set_warning();
     return;
   }
 
-  // --- Lockup prevention #2: clamp OSR index before using it for delays ---
-  if (this->osr_ > 5) {
-    ESP_LOGW(TAG, "Invalid OSR index %u; clamping to 0 (8192).", this->osr_);
-    this->osr_ = 0;
-  }
+  // --- Safe, non-blocking device presence probe ---
+  i2c::ErrorCode err = i2c::ERROR_OK;
+  uint8_t dummy = 0;
+  uint32_t start = millis();
+  do {
+    err = this->write(&dummy, 0);
+    if (err == i2c::ERROR_OK) break;
+    App.feed_wdt();
+    delay(5);
+  } while (millis() - start < 300);
 
+  if (err != i2c::ERROR_OK) {
+    ESP_LOGW(TAG, "MS5837 not detected within 300 ms, skipping initialization.");
+    this->mark_failed();
+    this->status_set_warning();
+    return;
+  }
+  
   // Reset
   uint8_t cmd = MS5837_RESET;
   auto err = this->write(&cmd, 1);
