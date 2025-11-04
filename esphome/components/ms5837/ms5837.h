@@ -2,8 +2,10 @@
 
 #include "esphome/core/component.h"
 #include "esphome/components/sensor/sensor.h"
-#include "esphome/core/hal.h"
-#include "Arduino.h"
+#include "esphome/core/hal.h"  // always include this first
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
 #include <Wire.h>
 
 namespace esphome {
