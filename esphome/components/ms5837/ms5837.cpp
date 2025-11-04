@@ -22,14 +22,22 @@ void MS5837Sensor::setup() {
   ESP_LOGCONFIG(TAG, "Setting up MS5837 (0x%02X)...", this->address_);
 
   // --- HARD LOCKUP PREVENTION: check I²C bus lines before any transaction ---
+  auto *bus = this->get_i2c_parent();
+  if (bus == nullptr) {
+    ESP_LOGW(TAG, "No I2C parent bus found, skipping MS5837 init.");
+    this->mark_failed();
+    this->status_set_warning();
+    return;
+  }
+
   // If the lines are stuck low, skip initialization entirely.
-  if (!this->parent_->is_started()) {
+  if (!bus->is_started()) {
     ESP_LOGW(TAG, "I2C bus not started, skipping MS5837 init.");
     this->mark_failed();
     this->status_set_warning();
     return;
   }
-  if (!this->parent_->is_ready()) {  // quick poll: verifies bus not busy
+  if (!bus->is_ready()) {  // quick poll: verifies bus not busy
     ESP_LOGW(TAG, "I2C bus busy or lines held low, skipping MS5837 init.");
     this->mark_failed();
     this->status_set_warning();
@@ -53,10 +61,10 @@ void MS5837Sensor::setup() {
     this->status_set_warning();
     return;
   }
-  
+
   // Reset
   uint8_t cmd = MS5837_RESET;
-  auto err = this->write(&cmd, 1);
+  err = this->write(&cmd, 1);
   if (err != i2c::ERROR_OK) {
     ESP_LOGE(TAG, "Reset command failed (I2C err %d)", err);
     this->mark_failed();
@@ -90,7 +98,9 @@ void MS5837Sensor::setup() {
   uint8_t crc_read = C_[0] >> 12;
   uint8_t crc_calc = crc4(C_);
   if (crc_read != crc_calc) {
-    ESP_LOGE(TAG, "CRC mismatch (read=%u calc=%u); leaving component in warning state.", crc_read, crc_calc);
+    ESP_LOGE(TAG,
+             "CRC mismatch (read=%u calc=%u); leaving component in warning state.",
+             crc_read, crc_calc);
     this->status_set_warning();
     return;  // avoid using bad coefficients
   }
