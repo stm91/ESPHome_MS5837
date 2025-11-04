@@ -10,47 +10,67 @@ void MS5837Sensor::setup() {
   ESP_LOGCONFIG(TAG, "Setting up MS5837 sensor via I2C (addr 0x%02X)...", this->address_);
 
   uint8_t cmd = MS5837_RESET;
-  if (this->write(&cmd, 1) != i2c::ERROR_OK) {
-    ESP_LOGE(TAG, "Reset command failed");
+  auto err = this->write(&cmd, 1);
+  if (err != i2c::ERROR_OK) {
+    ESP_LOGE(TAG, "Reset command failed (I2C err %d)", err);
+    this->mark_failed();
     return;
   }
   delay(10);
 
-  // Read calibration coefficients
+  // Read calibration coefficients with per-read failure checks
   for (uint8_t i = 0; i < 7; i++) {
     uint8_t reg = MS5837_PROM_READ + i * 2;
-    uint8_t data[2];
-    if (this->write(&reg, 1) != i2c::ERROR_OK || this->read(data, 2) != i2c::ERROR_OK) {
-      ESP_LOGE(TAG, "Failed reading calibration coefficient %u", i);
+    uint8_t data[2] = {0};
+
+    err = this->write(&reg, 1);
+    if (err != i2c::ERROR_OK) {
+      ESP_LOGW(TAG, "PROM write failed at index %u (err %d)", i, err);
+      this->status_set_warning();
       return;
     }
+
+    err = this->read(data, 2);
+    if (err != i2c::ERROR_OK) {
+      ESP_LOGW(TAG, "PROM read failed at index %u (err %d)", i, err);
+      this->status_set_warning();
+      return;
+    }
+
     this->C_[i] = (data[0] << 8) | data[1];
   }
 
+  // CRC validation
   uint8_t crc_read = C_[0] >> 12;
   uint8_t crc_calc = crc4(C_);
   if (crc_read != crc_calc) {
     ESP_LOGE(TAG, "CRC mismatch (read=%u calc=%u)", crc_read, crc_calc);
+    this->status_set_warning();
     return;
   }
 
-  uint8_t version = (C_[0] >> 5) & 0x7F;
-  this->model_ = version;
+  this->model_ = (C_[0] >> 5) & 0x7F;
   this->b_initialized_ = true;
-
-  ESP_LOGCONFIG(TAG, "MS5837 ready, version 0x%02X", version);
+  this->status_clear_warning();
+  ESP_LOGCONFIG(TAG, "MS5837 ready, version 0x%02X", this->model_);
 }
 
 void MS5837Sensor::update() {
+  if (this->is_failed()) {
+    ESP_LOGW(TAG, "Skipping update, device previously marked failed");
+    return;
+  }
+
   if (!this->b_initialized_) {
-    ESP_LOGW(TAG, "MS5837 not initialized, retrying...");
+    ESP_LOGW(TAG, "MS5837 not initialized, retrying setup()");
     this->setup();
     if (!this->b_initialized_) return;
   }
 
   if (!this->read_and_calc_values()) {
-    ESP_LOGE(TAG, "Read failed");
+    ESP_LOGW(TAG, "Sensor read failed, marking warning state");
     this->invalidate_sensors();
+    this->status_set_warning();
     return;
   }
 
@@ -64,6 +84,8 @@ void MS5837Sensor::update() {
     this->altitude_sensor->publish_state(this->convert_alt(this->altitude(p)));
   else if (this->mode_ == MS5837_MODE_DEPTH)
     this->altitude_sensor->publish_state(this->convert_alt(this->depth(p)));
+
+  this->status_clear_warning();
 }
 
 void MS5837Sensor::dump_config() {
@@ -75,24 +97,33 @@ void MS5837Sensor::dump_config() {
 
 uint8_t MS5837Sensor::read_and_calc_values() {
   uint8_t cmd;
+  uint8_t data[3];
+  i2c::ErrorCode err;
 
   // Pressure conversion
   cmd = MS5837_CONVERT_D1_8192 - (this->osr_ * 2);
-  if (this->write(&cmd, 1) != i2c::ERROR_OK) return 0;
+  err = this->write(&cmd, 1);
+  if (err != i2c::ERROR_OK) return 0;
   delay(CONVERSION_TIME[this->osr_]);
 
   cmd = MS5837_ADC_READ;
-  uint8_t data[3];
-  if (this->write(&cmd, 1) != i2c::ERROR_OK || this->read(data, 3) != i2c::ERROR_OK) return 0;
+  err = this->write(&cmd, 1);
+  if (err != i2c::ERROR_OK) return 0;
+  err = this->read(data, 3);
+  if (err != i2c::ERROR_OK) return 0;
   this->D1_pres_ = (data[0] << 16) | (data[1] << 8) | data[2];
 
   // Temperature conversion
   cmd = MS5837_CONVERT_D2_8192 - (this->osr_ * 2);
-  if (this->write(&cmd, 1) != i2c::ERROR_OK) return 0;
+  err = this->write(&cmd, 1);
+  if (err != i2c::ERROR_OK) return 0;
   delay(CONVERSION_TIME[this->osr_]);
 
   cmd = MS5837_ADC_READ;
-  if (this->write(&cmd, 1) != i2c::ERROR_OK || this->read(data, 3) != i2c::ERROR_OK) return 0;
+  err = this->write(&cmd, 1);
+  if (err != i2c::ERROR_OK) return 0;
+  err = this->read(data, 3);
+  if (err != i2c::ERROR_OK) return 0;
   this->D2_temp_ = (data[0] << 16) | (data[1] << 8) | data[2];
 
   this->calculate();
