@@ -3,7 +3,7 @@
   "name": "MS5837 Sensor",
   "version": "1.0",
   "codeowners": ["@stm91"],
-  "dependencies": [],
+  "dependencies": ["i2c"]
   "requirements": [],
   "platforms": ["sensor"]
 }
