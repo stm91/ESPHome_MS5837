@@ -43,6 +43,15 @@ namespace ms5837 {
 #define MS5837_OSR_512 4
 #define MS5837_OSR_256 5
 
+// Model identifiers encoded in PROM word 0 bits [11:5]
+#define MS5837_MODEL_02BA 0x00  // 0–2 bar range
+#define MS5837_MODEL_30BA 0x1A  // 0–30 bar range
+
+// variant_ values (0 = auto-detect from PROM, 1 = force 30BA, 2 = force 02BA)
+#define MS5837_VARIANT_AUTO  0
+#define MS5837_VARIANT_30BA  1
+#define MS5837_VARIANT_02BA  2
+
 static const uint8_t CONVERSION_TIME[] = {18, 9, 5, 3, 2, 1};
 
 class MS5837Sensor : public PollingComponent, public i2c::I2CDevice {
@@ -60,6 +69,7 @@ class MS5837Sensor : public PollingComponent, public i2c::I2CDevice {
         atmospheric_press_(MS5837_ISA_SEALEVEL_PRESSURE),
         mode_(mode),
         osr_(osr),
+        variant_(MS5837_VARIANT_AUTO),
         avg_runs_(1),
         temp_units_(MS5837_UNITS_TEMP_C),
         press_units_(MS5837_UNITS_PRESS_HPA),
@@ -77,8 +87,9 @@ class MS5837Sensor : public PollingComponent, public i2c::I2CDevice {
   void set_density(float d) { fluid_density_ = d; }
   void set_offsets(float t_off, float p_off) { temp_offset_ = t_off; press_offset_ = p_off; }
   void set_avg_count(uint8_t c) { avg_runs_ = c; }
-  // Reference atmospheric pressure in Pa used as the depth=0 baseline (default: ISA sea level 101325 Pa)
   void set_atmospheric_pressure(float pa) { atmospheric_press_ = pa; }
+  // Override PROM auto-detection: MS5837_VARIANT_02BA or MS5837_VARIANT_30BA
+  void set_variant(uint8_t v) { variant_ = v; }
 
  protected:
   uint8_t read_and_calc_values();
@@ -96,6 +107,7 @@ class MS5837Sensor : public PollingComponent, public i2c::I2CDevice {
   uint8_t model_;
   bool b_initialized_;
   uint8_t mode_;
+  uint8_t variant_;
   uint8_t avg_runs_;
   uint8_t osr_;
   uint8_t temp_units_;

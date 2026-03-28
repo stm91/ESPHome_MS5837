@@ -27,6 +27,7 @@ MS5837Sensor = ms5837_ns.class_("MS5837Sensor", cg.PollingComponent, i2c.I2CDevi
 CONF_MODE = "mode"
 CONF_OSR = "osr"
 CONF_AVG_COUNT = "avg_count"
+CONF_VARIANT = "variant"
 CONF_TEMP_OFFSET = "temp_offset"
 CONF_PRESS_OFFSET = "press_offset"
 CONF_FLUID_DENSITY = "fluid_density"
@@ -42,6 +43,11 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_MODE, default=0): cv.int_range(min=0, max=2),
             cv.Optional(CONF_OSR, default=0): cv.int_range(min=0, max=5),
             cv.Optional(CONF_AVG_COUNT, default=1): cv.int_range(min=1, max=255),
+            # Sensor hardware variant — set explicitly if auto-detection is unreliable
+            # auto = read model byte from PROM (default)
+            # 30ba = MS5837-30BA (0–30 bar, Blue Robotics Bar30)
+            # 02ba = MS5837-02BA (0–2 bar, Blue Robotics Bar02)
+            cv.Optional(CONF_VARIANT, default="auto"): cv.one_of("auto", "30ba", "02ba", lower=True),
             # Calibration trims — applied to the raw reading before unit conversion / depth calc
             cv.Optional(CONF_TEMP_OFFSET, default=0.0): cv.float_,
             cv.Optional(CONF_PRESS_OFFSET, default=0.0): cv.float_,
@@ -84,6 +90,10 @@ async def to_code(config):
 
     if config[CONF_AVG_COUNT] != 1:
         cg.add(var.set_avg_count(config[CONF_AVG_COUNT]))
+    variant_map = {"auto": 0, "30ba": 1, "02ba": 2}
+    variant_val = variant_map[config[CONF_VARIANT]]
+    if variant_val != 0:
+        cg.add(var.set_variant(variant_val))
     if config[CONF_TEMP_OFFSET] != 0.0 or config[CONF_PRESS_OFFSET] != 0.0:
         cg.add(var.set_offsets(config[CONF_TEMP_OFFSET], config[CONF_PRESS_OFFSET]))
     if config[CONF_FLUID_DENSITY] != 997.0:

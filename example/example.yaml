@@ -34,6 +34,12 @@ i2c:
 
 sensor:
   - platform: ms5837
+    # variant: selects the compensation formula — must match your hardware
+    #   auto  = read model byte from PROM (may be unreliable on some batches)
+    #   02ba  = MS5837-02BA (0–2 bar, Blue Robotics Bar02) <-- most common hobbyist part
+    #   30ba  = MS5837-30BA (0–30 bar, Blue Robotics Bar30)
+    variant: 02ba
+
     # mode: 0 = raw (temp + pressure only)
     #        1 = altitude
     #        2 = depth / water level  <-- use this for a reservoir

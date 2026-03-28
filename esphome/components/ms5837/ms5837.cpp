@@ -92,9 +92,25 @@ void MS5837Sensor::setup() {
   }
 
   this->model_ = (C_[0] >> 5) & 0x7F;
+
+  // Apply forced variant override before any formula selection
+  if (this->variant_ == MS5837_VARIANT_02BA) {
+    this->model_ = MS5837_MODEL_02BA;
+  } else if (this->variant_ == MS5837_VARIANT_30BA) {
+    this->model_ = MS5837_MODEL_30BA;
+  } else {
+    // Auto-detect: warn if unrecognised so the user knows to set variant: explicitly
+    if (this->model_ != MS5837_MODEL_30BA && this->model_ != MS5837_MODEL_02BA) {
+      ESP_LOGW(TAG, "Unrecognised PROM model 0x%02X — defaulting to 30BA formulas. "
+               "Set 'variant: 30ba' or 'variant: 02ba' explicitly.", this->model_);
+      this->model_ = MS5837_MODEL_30BA;
+    }
+  }
+
+  const char *variant_str = (this->model_ == MS5837_MODEL_02BA) ? "02BA" : "30BA";
+  ESP_LOGCONFIG(TAG, "MS5837-%s ready (PROM model byte 0x%02X)", variant_str, (C_[0] >> 5) & 0x7F);
   this->b_initialized_ = true;
   this->status_clear_warning();
-  ESP_LOGCONFIG(TAG, "MS5837 ready, version 0x%02X", this->model_);
 }
 
 void MS5837Sensor::update() {
@@ -183,18 +199,34 @@ uint8_t MS5837Sensor::read_and_calc_values() {
 }
 
 void MS5837Sensor::calculate() {
-  // First-order compensation
-  int32_t dT   = (int32_t)D2_temp_ - ((uint32_t)C_[5] << 8);
-  TEMP_        = 2000 + ((int64_t)dT * C_[6]) / 8388608;
-  int64_t OFF  = ((int64_t)C_[2] << 16) + (((int64_t)C_[4] * dT) >> 7);
-  int64_t SENS = ((int64_t)C_[1] << 15) + (((int64_t)C_[3] * dT) >> 8);
+  // First-order — dT and TEMP are identical for both variants
+  int32_t dT  = (int32_t)D2_temp_ - ((uint32_t)C_[5] << 8);
+  TEMP_       = 2000 + ((int64_t)dT * C_[6]) / 8388608;  // /2^23
 
-  // Second-order compensation (MS5837-30BA §8.2 — applied before pressure calc)
+  int64_t OFF, SENS;
+  if (this->model_ == MS5837_MODEL_02BA) {
+    // MS5837-02BA §8.2
+    OFF  = ((int64_t)C_[2] << 17) + (((int64_t)C_[4] * dT) >> 6);
+    SENS = ((int64_t)C_[1] << 16) + (((int64_t)C_[3] * dT) >> 7);
+  } else {
+    // MS5837-30BA §8.2
+    OFF  = ((int64_t)C_[2] << 16) + (((int64_t)C_[4] * dT) >> 7);
+    SENS = ((int64_t)C_[1] << 15) + (((int64_t)C_[3] * dT) >> 8);
+  }
+
+  // Second-order compensation (T < 20 °C)
   int64_t T2 = 0, OFF2 = 0, SENS2 = 0;
   if (TEMP_ < 2000) {
-    T2    = 3 * ((int64_t)dT * dT) >> 33;
-    OFF2  = 3 * (int64_t)(TEMP_ - 2000) * (TEMP_ - 2000) / 2;
-    SENS2 = 5 * (int64_t)(TEMP_ - 2000) * (TEMP_ - 2000) / 8;
+    if (this->model_ == MS5837_MODEL_02BA) {
+      T2    = 11 * ((int64_t)dT * dT) >> 35;
+      OFF2  = 31 * (int64_t)(TEMP_ - 2000) * (TEMP_ - 2000) / 8;
+      SENS2 = 63 * (int64_t)(TEMP_ - 2000) * (TEMP_ - 2000) / 32;
+    } else {
+      T2    = 3  * ((int64_t)dT * dT) >> 33;
+      OFF2  = 3  * (int64_t)(TEMP_ - 2000) * (TEMP_ - 2000) / 2;
+      SENS2 = 5  * (int64_t)(TEMP_ - 2000) * (TEMP_ - 2000) / 8;
+    }
+    // Extended very-cold correction (T < -15 °C) — same for both variants
     if (TEMP_ < -1500) {
       OFF2  += 7 * (int64_t)(TEMP_ + 1500) * (TEMP_ + 1500);
       SENS2 += 4 * (int64_t)(TEMP_ + 1500) * (TEMP_ + 1500);
@@ -204,10 +236,20 @@ void MS5837Sensor::calculate() {
   OFF   -= OFF2;
   SENS  -= SENS2;
 
-  P_ = (((int64_t)D1_pres_ * SENS / 2097152) - OFF) / 8192;
+  if (this->model_ == MS5837_MODEL_02BA) {
+    P_ = (((int64_t)D1_pres_ * SENS / 2097152) - OFF) / 32768;  // /2^21, /2^15
+  } else {
+    P_ = (((int64_t)D1_pres_ * SENS / 2097152) - OFF) / 8192;   // /2^21, /2^13
+  }
 }
 
-float MS5837Sensor::pressure()     { return (float)P_    / 10.0f + press_offset_; }  // hPa
+float MS5837Sensor::pressure() {
+  // 02BA: P_ in units of 0.01 mbar → divide by 100 to get hPa
+  // 30BA: P_ in units of 0.1  mbar → divide by 10  to get hPa
+  if (this->model_ == MS5837_MODEL_02BA)
+    return (float)P_ / 100.0f + press_offset_;
+  return (float)P_ / 10.0f + press_offset_;
+}
 float MS5837Sensor::temperature()  { return (float)TEMP_ / 100.0f + temp_offset_; }  // °C
 
 float MS5837Sensor::altitude(float f_pressure_hpa) {
