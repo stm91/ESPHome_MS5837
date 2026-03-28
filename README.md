@@ -1,184 +1,196 @@
-# ESPHome_MS5837
-Custom ESPHome component for the MS5837-series pressure and temperature sensor.  Allows easy integration of the sensor into Home Assistant.  Perfect for measuring water tank or home sump levels.
+# ESPHome MS5837
 
-# Wiring
+Native ESPHome component for the **MS5837-02BA** and **MS5837-30BA** pressure / temperature sensor.  
+Perfect for measuring water depth, tank/reservoir level, or altitude.
+
+> **Note:** The old `platform: custom` + `MS5837_Component.h` approach is no longer used.  
+> This is a proper ESPHome external component — no manual includes or Arduino libraries required.
+
+---
+
+## Wiring
+
 <img src="/images/MS5837_Pinout.png" width="400px">
 <img src="/images/MS5837_Circuit.png" width="400px">
 <img src="/images/SampleBoard.png" width="400px">
-Pull-up resistor and decoupling capacitor values will depend on your installation.  I've succesfully used a 15' cable with 4.7kΩ and 1 uF.
 
-# Usage
-Save the source MS5837_Component.h to your Home Assistant config/esphome folder.
+Pull-up resistors and decoupling capacitor values depend on your installation.  
+A 4.7 kΩ pull-up and 1 µF decoupling cap work well even over a 15-ft cable.
 
-## Setup required libraries
-Add into the "esphome" section at the top of the project yaml file.
-``` yaml
-esphome:
-  libraries:
-   - "Arduino"
-   - "Wire"
-   - "SPI"
-  includes:
-   - MS5837_Component.h
+---
+
+## Quick-start YAML
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/stm91/ESPHome_MS5837
+      ref: main
+    components: [ms5837]
+
+i2c:
+  sda: 20
+  scl: 21
+  scan: true
+
+sensor:
+  - platform: ms5837
+    variant: 02ba          # 02ba or 30ba — set explicitly to avoid PROM auto-detect issues
+    mode: 2                # 0 = raw, 1 = altitude, 2 = depth/level
+    osr: 0                 # ADC oversampling (0 = 8192, highest accuracy)
+    avg_count: 3           # average 3 readings per update cycle
+    update_interval: 10s
+
+    atmospheric_pressure: 101325.0   # Pa — your local air pressure for zero calibration
+
+    temperature:
+      name: "Water Temperature"
+    pressure:
+      name: "Raw Pressure"
+    altitude:
+      name: "Water Level"    # reports depth/level in metres when mode: 2
 ```
 
-## Setup I2C
-Tell esphome which pins to use for I2C.
-``` yaml
+A fully-annotated example is in [`example/example.yaml`](example/example.yaml).
+
+---
+
+## Configuration reference
+
+### Required I2C block
+
+```yaml
 i2c:
-  sda: 21
-  scl: 22
+  sda: <pin>
+  scl: <pin>
   scan: true
 ```
 
-## Define the component and outputs
-``` yaml
+Default I2C address: **0x76**.  Override with `address: 0x77` inside the sensor block if needed.
+
+---
+
+### `platform: ms5837` options
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `variant` | `auto` | Sensor variant: `auto` (PROM detect), `02ba`, or `30ba`. Set explicitly when `auto` is unreliable. |
+| `mode` | `0` | `0` = raw (temp + pressure only) · `1` = altitude · `2` = depth / water level |
+| `osr` | `0` | ADC oversampling index — see table below |
+| `avg_count` | `1` | Number of ADC readings averaged per update (higher = smoother, slower) |
+| `update_interval` | `60s` | How often to poll the sensor |
+| `atmospheric_pressure` | `101325.0` | Local air pressure in **Pa** — used as the depth=0 baseline in `mode: 2` |
+| `temp_offset` | `0.0` | Temperature trim in **°C** |
+| `press_offset` | `0.0` | Pressure trim in **hPa** applied after atmospheric correction |
+| `fluid_density` | `997.0` | Fluid density in **kg/m³** (`997` = freshwater, `1025` = seawater) |
+| `temperature` | — | Optional temperature sensor sub-block |
+| `pressure` | — | Optional pressure sensor sub-block (hPa) |
+| `altitude` | — | Optional altitude/depth/level sensor sub-block (m) |
+
+#### OSR index table
+
+| `osr` | Oversampling | Conversion time |
+|-------|-------------|-----------------|
+| `0`   | 8192        | ~18 ms (default, most accurate) |
+| `1`   | 4096        | ~9 ms  |
+| `2`   | 2048        | ~5 ms  |
+| `3`   | 1024        | ~3 ms  |
+| `4`   | 512         | ~2 ms  |
+| `5`   | 256         | ~1 ms  |
+
+---
+
+## Modes
+
+### `mode: 0` — Raw
+Reports temperature (°C) and pressure (hPa) only.  The `altitude` sub-sensor is ignored.
+
+### `mode: 1` — Altitude
+Calculates altitude using the barometric formula.  
+Set `atmospheric_pressure` to your current sea-level pressure for true altitude; leave at `101325` for pressure altitude.
+
+### `mode: 2` — Depth / Water level *(reservoir use-case)*
+Calculates depth/level from the pressure difference between the sensor and `atmospheric_pressure`.  
+The `altitude` sensor entity reports this value in metres.
+
+---
+
+## Calibrating zero for reservoir level
+
+1. **Set `atmospheric_pressure`** to your actual local air pressure in Pa (e.g. from a nearby weather station).  
+   This is the primary zero-point adjustment — get it right and `press_offset` won't be needed.
+
+2. **Fine-tune with `press_offset`** if a small residual offset remains after installation.  
+   With the reservoir at your chosen "zero" reference level (e.g. empty), read the reported level,  
+   then set `press_offset` to `-(reading_m × fluid_density × 9.81 / 100)` (result in hPa).  
+   Example: sensor reads 0.05 m when empty → `press_offset: -4.89`
+
+3. **Only publish changes** — add `filters: - delta: 0.005` to the altitude sensor sub-block to  
+   suppress updates when the value hasn't changed meaningfully.
+
+---
+
+## Updating atmospheric pressure at runtime
+
+Use an ESPHome [`number`](https://esphome.io/components/number/) entity backed by a `template` platform
+and call `set_atmospheric_pressure()` through a lambda:
+
+```yaml
+number:
+  - platform: template
+    name: "Atmospheric Pressure Reference"
+    id: atm_pressure_ref
+    unit_of_measurement: "Pa"
+    mode: box
+    min_value: 90000
+    max_value: 110000
+    step: 1
+    initial_value: 101325
+    optimistic: true
+    restore_value: true
+    set_action:
+      - lambda: |-
+          id(ms5837_sensor).set_atmospheric_pressure(x);
+
 sensor:
-  - platform: custom
-    lambda: |-
-      auto MS5837 = new MS5837_Component(60000, MS5837_MODE_ALTITUDE, MS5837_OSR_1024);
-      MS5837->SetUnits(MS5837_UNITS_TEMP_F, MS5837_UNITS_PRESS_INHG, MS5837_UNITS_ALT_FT);
-      MS5837->SetOffsets(0, 1.7f);
-      MS5837->SetResultsAvgCount(3);
-      MS5837->SubscribeToPressureState("sensor.weather_station_pressure", MS5837_UNITS_PRESS_INHG);
-      App.register_component(MS5837);
-      return {MS5837->temperature_sensor, MS5837->pressure_sensor, MS5837->altitude_sensor};
-    sensors:
-      - name: "MS5837 Temperature"
-        unit_of_measurement: °F
-        accuracy_decimals: 1
-      - name: "MS5837 Pressure"
-        unit_of_measurement: inHg
-        accuracy_decimals: 3
-      - name: "MS5837 Altitude"
-        unit_of_measurement: ft
-        accuracy_decimals: 1
-```
-### Create it
-First instantiate the component and supply basic parameters.  All of these parameters are optional if you wish to use the defaults.
-``` yaml
-auto MS5837 = new MS5837_Component(60000, MS5837_MODE_ALTITUDE, MS5837_OSR_1024);
-```
-The first parameter is the update frequency, in ms. In this case it will update every 60 seconds.
-
-Next is the operating mode.  There are 3 choices:
-- MS5837_MODE_RAW - Report only temperature and pressure (default)
-- MS5837_MODE_ALTITUDE - Report either true altitude or pressure altitude depending on if sea level pressure is supplied later
-- MS5837_MODE_DEPTH - Report depth.  Needs ambient pressure for accurate results (see service "update_pressure")
-
-Finally is the resolution.  Higher resolutions give more precise results but take longer to compute.  There are 6 choices:
-- MS5837_OSR_8192 - 36ms (default)
-- MS5837_OSR_4096 - 18ms
-- MS5837_OSR_2048 - 10ms
-- MS5837_OSR_1024 - 6ms
-- MS5837_OSR_512 - 4ms
-- MS5837_OSR_256 - 2ms
-
-
-### Units
-Decide which units to report in (optional).  Altitude/Depth units may be left out if using MS5837_MODE_RAW.
-``` yaml
-MS5837->SetUnits(MS5837_UNITS_TEMP_F, MS5837_UNITS_PRESS_INHG, MS5837_UNITS_ALT_FT);
-```
-Temperature units
-- MS5837_UNITS_TEMP_C - Celsius (default)
-- MS5837_UNITS_TEMP_F - Fahrenheit
-- MS5837_UNITS_TEMP_K - Kelvin
-- MS5837_UNITS_TEMP_R - Rankine
-
-Pressure units
-- MS5837_UNITS_PRESS_HPA  - HectoPascals (default)
-- MS5837_UNITS_PRESS_PA   - Pascals
-- MS5837_UNITS_PRESS_KPA  - KiloPascals
-- MS5837_UNITS_PRESS_INHG - Inches of Mercury
-
-Altitude/Depth units
-- MS5837_UNITS_ALT_M  - Meters (default)
-- MS5837_UNITS_ALT_FT - Feet
-- MS5837_UNITS_ALT_CM - Centimeters
-- MS5837_UNITS_ALT_IN - Inches
-
-### Calibration offsets (optional)
-An offset may be applied to temperature and pressure based on a known value.  For example, pressure reads low compared to an accurate weather station.
-``` yaml
-MS5837->SetOffsets(0, 1.7f);
-```
-- Temperature: °C
-- Pressure: hPa
-
-### Smooth results (optional)
-If desired, the component will request multiple readings of the sensor values and average the results.  This should help to smooth out any noise in the sensor.  Simply tell it how many readings you would like to average.  If this line is not included, it defaults to a single reading (no smoothing).  Note that at higher OSR values this can add significant time.
-``` yaml
-MS5837->SetResultsAvgCount(3);
+  - platform: ms5837
+    id: ms5837_sensor
+    # ... rest of config
 ```
 
-### Read the values
-If using MS5837_MODE_RAW, only 2 values will be returned
-``` yaml
-return {MS5837->temperature_sensor, MS5837->pressure_sensor};
-```
-If using MS5837_MODE_ALTITUDE or MS5837_MODE_DEPTH, 3 values will be returned
-``` yaml
-return {MS5837->temperature_sensor, MS5837->pressure_sensor, MS5837->altitude_sensor};
-```
+---
 
-### Home Assistant entities
-Declare the entities shown in Home Assistant and name them as you prefer.  Units here are only what are displayed in Home Assistant, the actual conversion is done above.  If using MS5837_MODE_RAW, leave out the third entity (Altitude/Depth).
-``` yaml
-sensors:
-  - name: "MS5837 Temperature"
-    unit_of_measurement: °F
-    accuracy_decimals: 1
-  - name: "MS5837 Pressure"
-    unit_of_measurement: inHg
-    accuracy_decimals: 3
-  - name: "MS5837 Altitude"
-    unit_of_measurement: ft
-    accuracy_decimals: 1
-```
+## Hardware variants
 
-## Update ambient pressure from Home Assistant (optional)
-There are two ways to update the ambient/sea level pressure: via a Home Assistant service or by subscribing to a Home Assistant entity.
+| Variant | Range | Typical use |
+|---------|-------|-------------|
+| MS5837-**02BA** | 0–2 bar (0–10 m fresh water) | Reservoir level, shallow depth |
+| MS5837-**30BA** | 0–30 bar (0–300 m) | Deep water, Blue Robotics Bar30 |
 
-### Service
-The component exposes a service to Home Assistant: "_update_pressure".  It is used in either MS5837_MODE_ALTITUDE or MS5837_MODE_DEPTH.  The new pressure must be reported in hPa.
+Set `variant: 02ba` or `variant: 30ba` explicitly to bypass PROM auto-detection,  
+which can be unreliable on some production batches.
 
-This could be done from a Home Assistant automation, such as:
-``` yaml
-trigger:
-  - platform: state
-    entity_id:
-      - sensor.weather_station_pressure
-condition: []
-action:
-  - service: esphome.tank_level_update_pressure
-    data:
-      New Pressure (hPa): >-
-        {{ (states('sensor.weather_station_pressure') | float) * 33.86388640341 }} 
-```
-Note the conversion from the weather station's inHg to hPa.
+---
 
-#### MS5837_MODE_ALTITUDE
-Sea Level Pressure may be optionally supplied.  
+## Second-order temperature compensation
 
-- If not supplied, the altitude calculation is based on an ISA sea level pressure of 1013.25.  This results in the component reporting pressure altitude.
-- If sea level pressure is supplied, the altitude calculation is based on this pressure.  This mean the component reports true altitude.
+The component implements the full MS5837 §8.2 two-stage compensation:
 
-#### MS5837_MODE_DEPTH
-Ambient pressure needs to be supplied to accurately calculate depth.  This could be supplied from another sensor above water or a weather station.  If neither are available, calculating the [standard pressure](https://www.madur.com/index.php?page=/altitude) should get you close though you will see variations as the ambient pressure changes.  If not supplied, it assumes your location is at sea level and the depth reading will be inaccurate.  
+- **First order** — applied at all temperatures.
+- **Second order (low-T)** — additional correction terms activate for T < 20 °C to reduce non-linearity.
+- **Second order (very-low-T)** — further correction terms activate for T < −15 °C.
 
-### Entity
+This is handled entirely in firmware; no user configuration is required.
 
-Subscribing to a Home Assistant entity requires no external setup.  Simply supply the entity identifier and whenever the entity updates the component will automatically read the new value.  On startup the processing of altitude/depth calculations will be delayed until a valid pressure is received, so as to avoid incorrect values.  Pressure may be supplied in any of the valid units.
+---
 
-``` yaml
-MS5837->SubscribeToPressureState("sensor.weather_station_pressure", MS5837_UNITS_PRESS_INHG);
-```
+## References
 
-# References
-[MS583702BA06-50 Datasheet](https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=MS5837-02BA01&DocType=DS&DocLang=English)
+- [MS5837-02BA Datasheet](https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=MS5837-02BA01&DocType=DS&DocLang=English)
+- [MS5837-30BA Datasheet](https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=MS5837-30BA&DocType=DS&DocLang=English)
+- [ESPHome External Components](https://esphome.io/components/external_components.html)
 
-[MS583730BA01-50 Datasheet](https://www.te.com/commerce/DocumentDelivery/DDEController?Action=srchrtrv&DocNm=MS5837-30BA&DocType=DS&DocLang=English)
+## Thanks
 
-# Thanks
-Initially based on BlueRobotics' [MS5837 Arduino library](https://github.com/bluerobotics/BlueRobotics_MS5837_Library).
+Originally inspired by Blue Robotics' [MS5837 Arduino library](https://github.com/bluerobotics/BlueRobotics_MS5837_Library).
