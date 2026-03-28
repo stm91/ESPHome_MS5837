@@ -8,14 +8,10 @@ Perfect for measuring water depth, tank/reservoir level, or altitude.
 
 ---
 
-## Wiring
+## Sensor Module
 
-<img src="/images/MS5837_Pinout.png" width="400px">
-<img src="/images/MS5837_Circuit.png" width="400px">
-<img src="/images/SampleBoard.png" width="400px">
-
-Pull-up resistors and decoupling capacitor values depend on your installation.  
-A 4.7 kΩ pull-up and 1 µF decoupling cap work well even over a 15-ft cable.
+<img src="/images/pressureSensorFront.jpg" width="400px">
+<img src="/images/pressureSensorBack.jpg" width="400px">
 
 ---
 
