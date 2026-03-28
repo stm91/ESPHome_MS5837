@@ -1,0 +1,22 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# ESPHome build artefacts
+.esphome/
+esphome/.esphome/
+
+# ESPHome secrets – never commit
+secrets.yaml
+
+# JetBrains IDE
+.idea/
+# (keep .idea/.gitignore so shared settings inside .idea/ are tracked when
+#  teams choose to commit the .idea folder; remove this line if you do that)
+

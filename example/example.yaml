@@ -1,16 +1,18 @@
 esphome:
-  name: esphome-MS5837-example
-  libraries:
-   - "Arduino"
-   - "Wire"
-   - "SPI"
-  includes:
-   - MS5837_Component.h
+  name: esphome-ms5837-example
 
 esp32:
   board: node32s
   framework:
     type: arduino
+
+# Pull the component from this repository
+external_components:
+  - source:
+      type: git
+      url: https://github.com/YOUR_USER/ESPHome_MS5837
+      ref: main
+    components: [ms5837]
 
 # Enable logging
 logger:
@@ -19,6 +21,7 @@ logger:
 api:
 
 ota:
+  password: !secret ota_password
 
 wifi:
   ssid: !secret wifi_ssid
@@ -28,24 +31,60 @@ i2c:
   sda: 21
   scl: 22
   scan: true
-    
+
 sensor:
-  - platform: custom
-    lambda: |-
-      auto MS5837 = new MS5837_Component(60000, MS5837_MODE_ALTITUDE, MS5837_OSR_1024);
-      MS5837->SetUnits(MS5837_UNITS_TEMP_F, MS5837_UNITS_PRESS_INHG, MS5837_UNITS_ALT_FT);
-      MS5837->SetOffsets(0, 1.7f);
-      MS5837->SetResultsAvgCount(3);
-      MS5837->SubscribeToPressureState("sensor.weather_station_pressure", MS5837_UNITS_PRESS_INHG);
-      App.register_component(MS5837);
-      return {MS5837->temperature_sensor, MS5837->pressure_sensor, MS5837->altitude_sensor};
-    sensors:
-      - name: "MS5837 Temperature"
-        unit_of_measurement: °F
-        accuracy_decimals: 1
-      - name: "MS5837 Pressure"
-        unit_of_measurement: inHg
-        accuracy_decimals: 4
-      - name: "MS5837 Altitude"
-        unit_of_measurement: ft
-        accuracy_decimals: 1
+  - platform: ms5837
+    # mode: 0 = raw (temp + pressure only)
+    #        1 = altitude
+    #        2 = depth / water level  <-- use this for a reservoir
+    mode: 2
+
+    # osr: ADC oversampling ratio — higher = more accurate, slower conversion
+    #   0 = 8192 (36 ms, default)   3 = 1024 (6 ms)
+    #   1 = 4096 (18 ms)            4 = 512  (4 ms)
+    #   2 = 2048 (10 ms)            5 = 256  (2 ms)
+    osr: 0
+
+    # avg_count: number of ADC reads averaged per update cycle (default 1)
+    # Higher values smooth noise; each extra read adds ~2×CONVERSION_TIME ms.
+    avg_count: 3
+
+    update_interval: 10s
+
+    # --- Calibration ---
+    # Set atmospheric_pressure to your local air pressure in Pa so the sensor
+    # reads 0 when there is no water above it.
+    # Find your value from a weather station or a local barometer sensor.
+    # Default is ISA sea level (101325 Pa); leave it if you will use press_offset instead.
+    atmospheric_pressure: 101325.0   # Pa — replace with your actual local pressure
+
+    # press_offset: fine-trim in hPa applied after atmospheric correction.
+    # Useful after installation: empty the reservoir to your zero reference,
+    # read the reported level, then set press_offset = -(level_m * density * 9.81 / 100).
+    # Example: sensor reads 0.05 m when empty → press_offset: -4.89
+    press_offset: 0.0   # hPa
+
+    # fluid_density: kg/m³ — affects depth calculation only.
+    #   997 = freshwater (default)
+    #   1025 = seawater / brackish
+    fluid_density: 997.0
+
+    # temp_offset: °C trim if temperature reads slightly off (rarely needed)
+    temp_offset: 0.0
+
+    altitude:
+      name: "Reservoir Level"
+      unit_of_measurement: "m"
+      accuracy_decimals: 3
+
+    # Keep pressure visible during initial calibration; can be removed afterwards
+    pressure:
+      name: "Reservoir Raw Pressure"
+      unit_of_measurement: "hPa"
+      accuracy_decimals: 2
+
+    temperature:
+      name: "Reservoir Water Temperature"
+      unit_of_measurement: "°C"
+      accuracy_decimals: 1
+
